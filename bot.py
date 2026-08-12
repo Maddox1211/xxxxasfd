@@ -37,6 +37,22 @@ AUTHORIZED_ROLE_IDS = {
     *MODERATOR_ROLE_IDS,
 }
 
+DEMOTE_ALLOWED_ROLE_IDS = {
+    1523420007415939132,
+    1523420156913778929,
+    1534130096183443577,
+    1523402078201057531,
+    1529936496608678072,
+}
+
+DEMOTABLE_ROLE_IDS = {
+    1523419081079001329,
+    1523419421450829996,
+    1534194372449534164,
+}
+
+DEMOTED_ROLE_ID = 1537199121667072061
+
 PUNISHMENTS_FILE = "punishments.json"
 
 TIMEOUT_DURATIONS = {
@@ -229,6 +245,30 @@ def has_admin_role(member: discord.Member) -> bool:
         for role in member.roles
     )
 
+def has_demote_role(member: discord.Member) -> bool:
+    return any(
+        role.id in DEMOTE_ALLOWED_ROLE_IDS
+        for role in member.roles
+    )
+
+
+def demote_only():
+    async def predicate(
+        interaction: discord.Interaction,
+    ) -> bool:
+        if interaction.guild is None:
+            return False
+
+        member = interaction.guild.get_member(
+            interaction.user.id
+        )
+
+        if member is None:
+            return False
+
+        return has_demote_role(member)
+
+    return app_commands.check(predicate)
 
 def moderator_only():
     async def predicate(
@@ -1755,6 +1795,117 @@ async def moderate(
         ephemeral=True,
     )
 
+
+@bot.tree.command(
+    name="demote",
+    description=(
+        "Remove a staff member's rank role(s) and "
+        "assign the demoted role."
+    ),
+)
+@app_commands.describe(
+    user="User mention, username, or Discord ID.",
+)
+@demote_only()
+async def demote(
+    interaction: discord.Interaction,
+    user: str,
+) -> None:
+    await interaction.response.defer(
+        ephemeral=True
+    )
+
+    target = await resolve_target(
+        interaction.guild,
+        user,
+    )
+
+    if target is None:
+        await interaction.followup.send(
+            "Could not find that user. "
+            "Use their Discord ID if they left.",
+            ephemeral=True,
+        )
+        return
+
+    member = interaction.guild.get_member(
+        target.id
+    )
+
+    if member is None:
+        await interaction.followup.send(
+            "That user must still be in the server "
+            "to be demoted.",
+            ephemeral=True,
+        )
+        return
+
+    matched_roles = [
+        role
+        for role in member.roles
+        if role.id in DEMOTABLE_ROLE_IDS
+    ]
+
+    if not matched_roles:
+        await interaction.followup.send(
+            f"{member} does not hold any of the "
+            "demotable roles.",
+            ephemeral=True,
+        )
+        return
+
+    demoted_role = interaction.guild.get_role(
+        DEMOTED_ROLE_ID
+    )
+
+    if demoted_role is None:
+        await interaction.followup.send(
+            "The demoted role could not be found "
+            "on this server.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        await member.remove_roles(
+            *matched_roles,
+            reason=(
+                f"Demoted by {interaction.user}"
+            ),
+        )
+
+        await member.add_roles(
+            demoted_role,
+            reason=(
+                f"Demoted by {interaction.user}"
+            ),
+        )
+
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "I don't have permission to change "
+            "that user's roles.",
+            ephemeral=True,
+        )
+        return
+
+    except discord.HTTPException as exc:
+        await interaction.followup.send(
+            f"Discord rejected the role change: {exc}",
+            ephemeral=True,
+        )
+        return
+
+    removed_names = ", ".join(
+        role.name for role in matched_roles
+    )
+
+    await interaction.followup.send(
+        f"Demoted {member}.\n"
+        f"Removed: {removed_names}\n"
+        f"Added: {demoted_role.name}",
+        ephemeral=True,
+    )
 
 @bot.tree.command(
     name="userid",
